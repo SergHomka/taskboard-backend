@@ -11,7 +11,11 @@
  * Learn more at https://developers.cloudflare.com/workers/
  */
 
-import { sendLlmRequest, type ChatMessage } from "./llm";
+import {
+	decomposeTaskIntoSubtasks,
+	sendLlmRequest,
+	type ChatMessage,
+} from "./llm";
 
 const corsHeaders: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
@@ -101,6 +105,45 @@ export default {
 			try {
 				const reply = await sendLlmRequest(env, messages, { model });
 				return jsonWithCors({ ok: true, reply });
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return jsonWithCors({ ok: false, error: message }, { status: 500 });
+			}
+		}
+
+		if (url.pathname === "/api/subtasks" && request.method === "POST") {
+			let body: unknown;
+			try {
+				body = await request.json();
+			} catch {
+				return jsonWithCors(
+					{ ok: false, error: "Invalid JSON body." },
+					{ status: 400 },
+				);
+			}
+			if (typeof body !== "object" || body === null) {
+				return jsonWithCors(
+					{ ok: false, error: "Body must be a JSON object." },
+					{ status: 400 },
+				);
+			}
+			const task = (body as Record<string, unknown>).task;
+			const modelField = (body as Record<string, unknown>).model;
+			const model =
+				typeof modelField === "string" && modelField.length > 0
+					? modelField
+					: undefined;
+			if (typeof task !== "string" || !task.trim()) {
+				return jsonWithCors(
+					{ ok: false, error: 'Provide non-empty string "task".' },
+					{ status: 400 },
+				);
+			}
+			try {
+				const subtasks = await decomposeTaskIntoSubtasks(env, task, {
+					model,
+				});
+				return jsonWithCors({ ok: true, subtasks });
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return jsonWithCors({ ok: false, error: message }, { status: 500 });
