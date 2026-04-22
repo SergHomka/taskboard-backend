@@ -8,6 +8,8 @@
 
 Все пути ниже относительны к этому origin. Для запросов из браузера с другого домена включены **CORS** (`Access-Control-Allow-Origin: *`, поддерживаются `GET`, `POST`, `OPTIONS`).
 
+Вызовы к LLM на бэкенде идут **POST**-запросом на Venice OpenAI-compatible API: `https://api.venice.ai/api/v1/chat/completions` (секрет `VENICE_API_KEY`).
+
 ---
 
 ## `POST /api/chat` (рекомендуется для UI)

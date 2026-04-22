@@ -1,9 +1,14 @@
-import OpenAI from "openai";
-
 const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const DEFAULT_MODEL = "openai-gpt-4o-mini-2024-07-18";
 
-export type ChatMessage = OpenAI.Chat.ChatCompletionMessageParam;
+/** Сообщение в формате OpenAI-compatible Chat Completions (тело POST). */
+export type ChatMessage = {
+	role: string;
+	content: unknown;
+	name?: string;
+	tool_calls?: unknown;
+	tool_call_id?: string;
+};
 
 /** Одна подзадача после разбиения крупной задачи (формат для фронтенда). */
 export type SubtaskItem = { title: string; task: string };
@@ -83,26 +88,45 @@ export async function decomposeTaskIntoSubtasks(
 	return parseSubtasksResponse(raw);
 }
 
+type VeniceChatResponse = {
+	choices?: Array<{ message?: { content?: string | null } }>;
+	error?: { message?: string };
+};
+
 /**
- * Sends a chat completion request to Venice (OpenAI-compatible API).
- * Configure `VENICE_API_KEY` via `npx wrangler secret put VENICE_API_KEY`.
+ * POST https://api.venice.ai/api/v1/chat/completions (OpenAI-compatible).
+ * Секрет: `npx wrangler secret put VENICE_API_KEY`.
  */
 export async function sendLlmRequest(
 	env: Pick<Env, "VENICE_API_KEY">,
 	messages: ChatMessage[],
 	options?: { model?: string },
 ): Promise<string> {
-	const client = new OpenAI({
-		apiKey: env.VENICE_API_KEY,
-		baseURL: VENICE_BASE_URL,
+	const res = await fetch(`${VENICE_BASE_URL}/chat/completions`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: `Bearer ${env.VENICE_API_KEY}`,
+		},
+		body: JSON.stringify({
+			model: options?.model ?? DEFAULT_MODEL,
+			messages,
+		}),
 	});
 
-	const response = await client.chat.completions.create({
-		model: options?.model ?? DEFAULT_MODEL,
-		messages,
-	});
+	let data: VeniceChatResponse;
+	try {
+		data = (await res.json()) as VeniceChatResponse;
+	} catch {
+		throw new Error(`LLM response is not JSON (HTTP ${res.status})`);
+	}
 
-	const content = response.choices[0]?.message?.content;
+	if (!res.ok) {
+		const msg = data.error?.message ?? res.statusText;
+		throw new Error(`LLM error ${res.status}: ${msg}`);
+	}
+
+	const content = data.choices?.[0]?.message?.content;
 	if (content == null || content === "") {
 		throw new Error("LLM returned empty content");
 	}
