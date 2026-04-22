@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
 const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-const DEFAULT_MODEL = "openai-gpt-oss-120b";
+const DEFAULT_MODEL = "openai-gpt-4o-mini-2024-07-18";
 
 export type ChatMessage = OpenAI.Chat.ChatCompletionMessageParam;
 
