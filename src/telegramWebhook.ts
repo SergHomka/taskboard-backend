@@ -1,8 +1,28 @@
-import { decomposeTaskIntoSubtasks } from "./llm";
+import { decomposeUserTask } from "./llm";
 
 const TG_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token";
-const BOARD_TITLE_MAX_LEN = 120;
+const BOARD_TITLE_MAX_LEN = 64;
+const BOARD_TITLE_MAX_WORDS = 7;
 const TG_TEXT_LIMIT = 4096;
+const TITLE_LEADING_STOP_WORDS = new Set([
+	"необходимо",
+	"нужно",
+	"надо",
+	"требуется",
+	"реализовать",
+	"сделать",
+	"создать",
+	"разработать",
+	"внедрить",
+	"добавить",
+	"build",
+	"create",
+	"implement",
+	"add",
+	"need",
+	"must",
+	"should",
+]);
 const UUID_RE =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -103,12 +123,55 @@ function getTextFromUpdate(update: TelegramUpdate): string | undefined {
 }
 
 function boardTitleFromTelegramText(text: string): string {
-	const singleLine = text.trim().replace(/\s+/g, " ");
-	if (!singleLine) {
+	const short = normalizeShortBoardTitle(text);
+	if (!short) {
 		return `Telegram ${new Date().toISOString().slice(0, 16)}`;
 	}
-	if (singleLine.length <= BOARD_TITLE_MAX_LEN) return singleLine;
-	return `${singleLine.slice(0, BOARD_TITLE_MAX_LEN - 1)}…`;
+	return short;
+}
+
+function normalizeShortBoardTitle(raw: string): string | null {
+	let title = raw.trim().replace(/\s+/g, " ");
+	if (!title) return null;
+
+	title = title.replace(/^["'«»„”“]+|["'«»„”“]+$/g, "").trim();
+	title = title.replace(/[.,;:!?-]+$/g, "").trim();
+	if (!title) return null;
+
+	const words = title.split(/\s+/).filter(Boolean);
+	let start = 0;
+	while (start < words.length) {
+		const token = words[start].toLowerCase().replace(/[.,;:!?'"«»]/g, "");
+		if (!TITLE_LEADING_STOP_WORDS.has(token)) break;
+		start++;
+	}
+	const normalizedWords = words.slice(start);
+	if (normalizedWords.length > 0) {
+		title = normalizedWords.join(" ");
+	}
+
+	const clippedWords = title.split(/\s+/).filter(Boolean);
+	if (clippedWords.length > BOARD_TITLE_MAX_WORDS) {
+		title = clippedWords.slice(0, BOARD_TITLE_MAX_WORDS).join(" ");
+	}
+	if (title.length > BOARD_TITLE_MAX_LEN) {
+		title = title.slice(0, BOARD_TITLE_MAX_LEN).trimEnd();
+		title = title.replace(/[.,;:!?-]+$/g, "").trim();
+	}
+
+	return title || null;
+}
+
+/** Заголовок доски из модели или резервный вариант из текста сообщения. */
+function boardTitleFromAiOrFallback(
+	aiTitle: string | null,
+	userFallbackText: string,
+): string {
+	const aiShort = normalizeShortBoardTitle(aiTitle ?? "");
+	if (aiShort) {
+		return aiShort;
+	}
+	return boardTitleFromTelegramText(userFallbackText);
 }
 
 function chunkTelegramText(text: string): string[] {
@@ -281,8 +344,11 @@ async function runTelegramTaskPipeline(
 
 	try {
 		const ingestUserId = resolveTelegramServiceUserId(env);
-		const tasks = await decomposeTaskIntoSubtasks(env, userText);
-		const boardTitle = boardTitleFromTelegramText(userText);
+		const { boardTitle: aiBoardTitle, subtasks: tasks } = await decomposeUserTask(
+			env,
+			userText,
+		);
+		const boardTitle = boardTitleFromAiOrFallback(aiBoardTitle, userText);
 		const { tasksCreated } = await ingestBoardAndTasksViaRpc(
 			env,
 			ownerUserId,

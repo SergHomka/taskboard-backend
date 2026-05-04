@@ -12,7 +12,7 @@
  */
 
 import {
-	decomposeTaskIntoSubtasks,
+	decomposeUserTask,
 	sendLlmRequest,
 	type ChatMessage,
 } from "./llm";
@@ -150,10 +150,12 @@ export default {
 				);
 			}
 			try {
-				const subtasks = await decomposeTaskIntoSubtasks(env, task, {
+				const { boardTitle, subtasks } = await decomposeUserTask(env, task, {
 					model,
 				});
-				return jsonWithCors({ ok: true, subtasks });
+				const payload: Record<string, unknown> = { ok: true, subtasks };
+				if (boardTitle) payload.board_title = boardTitle;
+				return jsonWithCors(payload);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return jsonWithCors({ ok: false, error: message }, { status: 500 });

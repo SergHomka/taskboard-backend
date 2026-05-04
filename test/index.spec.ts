@@ -107,10 +107,13 @@ describe("POST /api/telegram-webhook", () => {
 							choices: [
 								{
 									message: {
-										content: JSON.stringify([
-											{ title: "One", task: "First step" },
-											{ title: "Two", task: "Second step" },
-										]),
+										content: JSON.stringify({
+											board_title: "Sprint planning",
+											subtasks: [
+												{ title: "One", task: "First step" },
+												{ title: "Two", task: "Second step" },
+											],
+										}),
 									},
 								},
 							],
@@ -173,6 +176,21 @@ describe("POST /api/telegram-webhook", () => {
 					? c[0].href
 					: (c[0] as Request).url,
 		);
+
+		const rpcCallBody = fetchSpy.mock.calls.find((c) => {
+			const u =
+				typeof c[0] === "string"
+					? c[0]
+					: c[0] instanceof URL
+						? c[0].href
+						: (c[0] as Request).url;
+			return u.includes("/rpc/telegram_ingest_board_and_tasks");
+		})?.[1] as RequestInit | undefined;
+		expect(rpcCallBody?.body).toBeDefined();
+		expect(
+			JSON.parse(String(rpcCallBody!.body)).p_board_title,
+		).toBe("Sprint planning");
+
 		expect(urls.some((u) => u.includes("api.venice.ai"))).toBe(true);
 		expect(
 			urls.some((u) => u.includes("/rpc/telegram_ingest_board_and_tasks")),
