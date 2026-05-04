@@ -50,7 +50,7 @@ export default {
 			return handleStripeWebhook(request, env);
 		}
 
-		if (url.pathname === "/api/telegram-webhook" && request.method === "POST") {
+		if (url.pathname === "/api/telegram-webhook") {
 			return handleTelegramWebhook(request, env, ctx);
 		}
 

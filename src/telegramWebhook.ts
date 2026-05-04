@@ -20,6 +20,60 @@ function resolveTelegramServiceUserId(env: Env): string {
 	return TELEGRAM_INGEST_SERVICE_USER_ID;
 }
 
+function truthySecret(envStr?: string): boolean {
+	return Boolean(envStr?.trim());
+}
+
+/** GET — только диагностика (ничего секретного). */
+export function telegramWebhookDiagnostics(request: Request, env: Env): Response {
+	const u = new URL(request.url);
+	const workerOrigin = `${u.protocol}//${u.host}`;
+	let supabaseHost = "";
+	try {
+		const raw = env.SUPABASE_URL?.trim();
+		if (raw) supabaseHost = new URL(raw).host;
+	} catch {
+		supabaseHost = "(неверный URL)";
+	}
+	const configured =
+		truthySecret(env.TELEGRAM_BOT_TOKEN) &&
+		truthySecret(env.SUPABASE_URL) &&
+		truthySecret(env.SUPABASE_SERVICE_ROLE_KEY) &&
+		truthySecret(env.TELEGRAM_INGEST_BOARD_OWNER_USER_ID) &&
+		truthySecret(env.VENICE_API_KEY);
+
+	return Response.json(
+		{
+			ok: true,
+			configured_for_telegram_ingest: configured,
+			webhook_post_url: `${workerOrigin}/api/telegram-webhook`,
+			supabase_host: supabaseHost || null,
+			secrets_present: {
+				TELEGRAM_BOT_TOKEN: truthySecret(env.TELEGRAM_BOT_TOKEN),
+				TELEGRAM_WEBHOOK_SECRET: truthySecret(env.TELEGRAM_WEBHOOK_SECRET),
+				SUPABASE_URL: truthySecret(env.SUPABASE_URL),
+				SUPABASE_SERVICE_ROLE_KEY: truthySecret(env.SUPABASE_SERVICE_ROLE_KEY),
+				TELEGRAM_INGEST_BOARD_OWNER_USER_ID: truthySecret(
+					env.TELEGRAM_INGEST_BOARD_OWNER_USER_ID,
+				),
+				VENICE_API_KEY: truthySecret(env.VENICE_API_KEY),
+			},
+			steps: [
+				"В Telegram Bot API выполните setWebhook на webhook_post_url (HTTPS).",
+				"Если в Workers задан TELEGRAM_WEBHOOK_SECRET — при setWebhook передайте тот же secret_token.",
+				"TELEGRAM_INGEST_BOARD_OWNER_USER_ID должен быть существующим auth.users.id (владелец новых досок).",
+				"SUPABASE_URL и ключ должны быть от того же проекта Supabase, куда применены миграции RPC.",
+			],
+		},
+		{
+			headers: {
+				"Content-Type": "application/json; charset=utf-8",
+				"Cache-Control": "no-store",
+			},
+		},
+	);
+}
+
 function telegramOk(): Response {
 	return new Response("OK", { status: 200 });
 }
@@ -105,6 +159,7 @@ async function ingestBoardAndTasksViaRpc(
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
+			Accept: "application/json",
 			apikey: key,
 			Authorization: `Bearer ${key}`,
 			Prefer: "return=representation",
@@ -130,14 +185,7 @@ async function ingestBoardAndTasksViaRpc(
 	}
 
 	if (!res.ok) {
-		const msg =
-			typeof data === "object" &&
-			data !== null &&
-			"message" in data &&
-			typeof (data as { message?: unknown }).message === "string"
-				? (data as { message: string }).message
-				: rawBody || `HTTP ${res.status}`;
-		throw new Error(msg);
+		throw new Error(postgrestErrorMessage(data, rawBody || `HTTP ${res.status}`));
 	}
 
 	const payload = normalizeRpcIngestPayload(data);
@@ -151,15 +199,39 @@ async function ingestBoardAndTasksViaRpc(
 	return { tasksCreated: n };
 }
 
-/** PostgREST может вернуть jsonb как объект или обёртку с именем функции. */
+function postgrestErrorMessage(data: unknown, fallback: string): string {
+	if (typeof data === "object" && data !== null) {
+		const o = data as Record<string, unknown>;
+		if (typeof o.message === "string") return o.message;
+		if (typeof o.error === "string") return o.error;
+		if (typeof o.error_description === "string") return o.error_description;
+	}
+	return fallback;
+}
+
+/** PostgREST может вернуть jsonb как объект, строку JSON или обёртку с именем функции. */
 function normalizeRpcIngestPayload(data: unknown): RpcIngestResult {
 	if (data == null) return {};
+	if (typeof data === "string") {
+		try {
+			return normalizeRpcIngestPayload(JSON.parse(data));
+		} catch {
+			return {};
+		}
+	}
 	if (typeof data === "object" && !Array.isArray(data)) {
 		const o = data as Record<string, unknown>;
 		if ("board_id" in o || "tasks_created" in o) {
 			return data as RpcIngestResult;
 		}
 		const inner = o.telegram_ingest_board_and_tasks;
+		if (typeof inner === "string") {
+			try {
+				return normalizeRpcIngestPayload(JSON.parse(inner));
+			} catch {
+				return {};
+			}
+		}
 		if (inner != null && typeof inner === "object" && !Array.isArray(inner)) {
 			return inner as RpcIngestResult;
 		}
@@ -238,6 +310,10 @@ export async function handleTelegramWebhook(
 	env: Env,
 	ctx: ExecutionContext,
 ): Promise<Response> {
+	if (request.method === "GET") {
+		return telegramWebhookDiagnostics(request, env);
+	}
+
 	if (request.method !== "POST") {
 		return new Response("Method Not Allowed", { status: 405 });
 	}
@@ -246,6 +322,9 @@ export async function handleTelegramWebhook(
 	if (webhookSecret) {
 		const headerSecret = request.headers.get(TG_SECRET_HEADER);
 		if (headerSecret !== webhookSecret) {
+			console.warn(
+				"telegram webhook: неверный или отсутствует заголовок X-Telegram-Bot-Api-Secret-Token (проверьте secret_token при setWebhook)",
+			);
 			return new Response("Unauthorized", { status: 401 });
 		}
 	}
@@ -271,7 +350,11 @@ export async function handleTelegramWebhook(
 			console.error("TELEGRAM_BOT_TOKEN is missing");
 			return telegramOk();
 		}
-		ctx.waitUntil(runTelegramTaskPipeline(env, chatId, text));
+		ctx.waitUntil(
+			runTelegramTaskPipeline(env, chatId, text).catch((err) => {
+				console.error("telegram waitUntil pipeline:", err);
+			}),
+		);
 	}
 
 	return telegramOk();
