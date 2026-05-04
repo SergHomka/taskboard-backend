@@ -16,6 +16,8 @@ import {
 	sendLlmRequest,
 	type ChatMessage,
 } from "./llm";
+import { handleStripeWebhook } from "./stripeWebhook";
+import { handleTelegramWebhook } from "./telegramWebhook";
 
 const corsHeaders: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
@@ -43,6 +45,14 @@ function emptyWithCors(status = 204): Response {
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
+
+		if (url.pathname === "/api/stripe-webhook" && request.method === "POST") {
+			return handleStripeWebhook(request, env);
+		}
+
+		if (url.pathname === "/api/telegram-webhook" && request.method === "POST") {
+			return handleTelegramWebhook(request, env, ctx);
+		}
 
 		if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") {
 			return emptyWithCors(204);

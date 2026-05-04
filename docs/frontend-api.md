@@ -159,6 +159,48 @@ async function askLlm(prompt: string): Promise<string> {
 
 ---
 
+## `POST /api/telegram-webhook` (Telegram Bot → доска)
+
+Эндпоинт для **webhook** Telegram: BotFather указывает URL вида  
+`https://<ваш-worker>/api/telegram-webhook`.
+
+### Что происходит
+
+1. Telegram шлёт **POST** с телом [Update](https://core.telegram.org/bots/api#update) (JSON).
+2. Если задан секрет вебхука, заголовок **`X-Telegram-Bot-Api-Secret-Token`** должен совпадать с `TELEGRAM_WEBHOOK_SECRET` (как при `setWebhook` с `secret_token`).
+3. Worker **сразу** отвечает **`200`** и текстом **`OK`** (чтобы Telegram не делал лишние повторы).
+4. В фоне (`waitUntil`): из `message` или `edited_message` берётся **`text`**, при его отсутствии — **`caption`**; текст отправляется в ту же логику разбиения, что и `POST /api/subtasks` (`decomposeTaskIntoSubtasks` → Venice API).
+5. Для **каждого** такого сообщения в Supabase одним вызовом **`telegram_ingest_board_and_tasks`** (Postgres RPC, одна транзакция) создаются **новая доска** с владельцем из секрета **`TELEGRAM_INGEST_BOARD_OWNER_USER_ID`**, три колонки (**Планы**, **В работе**, **Сделано**) и карточки в **«Планы»**. Так исключаются ошибки FK из‑за нескольких отдельных HTTP‑запросов к PostgREST.
+6. Заголовок доски — текст сообщения (до 120 символов), при необходимости усечён.
+7. **`created_by`** заполняется только если UUID из `TELEGRAM_SERVICE_USER_ID` / сервисный пользователь существует в `auth.users`; иначе вставляется `NULL` (чтобы не ломать FK).
+8. В чат приходит короткое сообщение бота с названием доски и числом задач или текст ошибки.
+
+В проекте должна быть применена миграция [`supabase/migrations/20260504210000_telegram_ingest_board_and_tasks_rpc.sql`](D:/GitHub/TaskBoardFornBack/aiboardBackend/aiboard/supabase/migrations/20260504210000_telegram_ingest_board_and_tasks_rpc.sql).
+
+### Переменные окружения (Wrangler secrets / `.dev.vars`)
+
+| Переменная | Назначение |
+|------------|------------|
+| `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather |
+| `TELEGRAM_WEBHOOK_SECRET` | Тот же `secret_token`, что при настройке webhook; пустое значение отключает проверку заголовка (только для отладки) |
+| `TELEGRAM_INGEST_BOARD_OWNER_USER_ID` | **Обязательно**: UUID пользователя Supabase (`auth.users.id`), который будет **владельцем** каждой новой доски из Telegram |
+| `TELEGRAM_SERVICE_USER_ID` | Необязательно: переопределить UUID для поля `board_tasks.created_by` |
+| `VENICE_API_KEY` | Ключ Venice для LLM |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Запись в БД от имени service role |
+
+Старые секреты `TELEGRAM_DEFAULT_BOARD_ID` / `TELEGRAM_DEFAULT_COLUMN_ID` больше не используются.
+
+### Ошибки HTTP на входе webhook
+
+| Код | Когда |
+|-----|--------|
+| `401` | Задан `TELEGRAM_WEBHOOK_SECRET`, но заголовок секрета не совпал |
+| `400` | Тело запроса не парсится как JSON |
+
+Ошибки после приёма апдейта (LLM, Supabase) пользователю уходят **сообщением в Telegram**, ответ webhook остаётся **`200 OK`**.
+
+---
+
 ## Безопасность
 
 Ключ к Venice хранится только на Cloudflare (секрет `VENICE_API_KEY`); фронтенду ключ не передаётся.

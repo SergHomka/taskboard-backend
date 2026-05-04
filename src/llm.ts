@@ -102,11 +102,18 @@ export async function sendLlmRequest(
 	messages: ChatMessage[],
 	options?: { model?: string },
 ): Promise<string> {
+	const apiKey = env.VENICE_API_KEY?.trim();
+	if (!apiKey) {
+		throw new Error(
+			"VENICE_API_KEY не задан. Локально: в папке worker создайте файл .dev.vars с строкой VENICE_API_KEY=ваш_ключ (https://venice.ai), перезапустите wrangler dev. Или: npx wrangler secret put VENICE_API_KEY",
+		);
+	}
+
 	const res = await fetch(`${VENICE_BASE_URL}/chat/completions`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
-			Authorization: `Bearer ${env.VENICE_API_KEY}`,
+			Authorization: `Bearer ${apiKey}`,
 		},
 		body: JSON.stringify({
 			model: options?.model ?? DEFAULT_MODEL,
@@ -123,6 +130,11 @@ export async function sendLlmRequest(
 
 	if (!res.ok) {
 		const msg = data.error?.message ?? res.statusText;
+		if (res.status === 401) {
+			throw new Error(
+				`Venice API 401 (Unauthorized): проверьте VENICE_API_KEY — действующий ключ с https://venice.ai, без пробелов; локально — .dev.vars или wrangler secret put. Ответ: ${msg}`,
+			);
+		}
 		throw new Error(`LLM error ${res.status}: ${msg}`);
 	}
 

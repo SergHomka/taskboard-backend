@@ -15,5 +15,9 @@
     "typescript": "^5.5.2",
     "vitest": "~3.2.0",
     "wrangler": "^4.84.1"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "stripe": "^22.1.0"
   }
 }
