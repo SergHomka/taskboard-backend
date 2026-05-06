@@ -16,6 +16,11 @@ import {
 	sendLlmRequest,
 	type ChatMessage,
 } from "./llm";
+import {
+	listDifyDatasets,
+	retrieveDifyDataset,
+	type RetrieveDifyDatasetOptions,
+} from "./difyRetrieve";
 import { handleStripeWebhook } from "./stripeWebhook";
 import { handleTelegramWebhook } from "./telegramWebhook";
 
@@ -56,6 +61,144 @@ export default {
 
 		if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") {
 			return emptyWithCors(204);
+		}
+
+		if (url.pathname === "/api/dify/retrieve" && request.method === "POST") {
+			let body: unknown;
+			try {
+				body = await request.json();
+			} catch {
+				return jsonWithCors(
+					{ ok: false, error: "Invalid JSON body." },
+					{ status: 400 },
+				);
+			}
+			if (typeof body !== "object" || body === null) {
+				return jsonWithCors(
+					{ ok: false, error: "Body must be a JSON object." },
+					{ status: 400 },
+				);
+			}
+			const o = body as Record<string, unknown>;
+			const datasetId = o.dataset_id;
+			const queryText = o.query;
+			const retrieval_model = o.retrieval_model;
+			const external_retrieval_model = o.external_retrieval_model;
+			const attachment_ids = o.attachment_ids;
+
+			if (typeof datasetId !== "string" || !datasetId.trim()) {
+				return jsonWithCors(
+					{ ok: false, error: 'Provide non-empty string "dataset_id".' },
+					{ status: 400 },
+				);
+			}
+			if (typeof queryText !== "string" || !queryText.trim()) {
+				return jsonWithCors(
+					{ ok: false, error: 'Provide non-empty string "query".' },
+					{ status: 400 },
+				);
+			}
+
+			const rm =
+				retrieval_model !== undefined &&
+				retrieval_model !== null &&
+				typeof retrieval_model === "object" &&
+				!Array.isArray(retrieval_model)
+					? (retrieval_model as Record<string, unknown>)
+					: undefined;
+
+			let extModel: RetrieveDifyDatasetOptions["external_retrieval_model"];
+			if (
+				external_retrieval_model !== undefined &&
+				external_retrieval_model !== null &&
+				typeof external_retrieval_model === "object" &&
+				!Array.isArray(external_retrieval_model)
+			) {
+				extModel =
+					external_retrieval_model as RetrieveDifyDatasetOptions["external_retrieval_model"];
+			}
+
+			let attIds: string[] | null | undefined;
+			if (attachment_ids === null) {
+				attIds = null;
+			} else if (Array.isArray(attachment_ids)) {
+				const ids = attachment_ids.filter(
+					(x): x is string => typeof x === "string" && x.length > 0,
+				);
+				attIds = ids.length ? ids : undefined;
+			}
+
+			try {
+				const result = await retrieveDifyDataset(env, datasetId, queryText, {
+					retrieval_model: rm,
+					external_retrieval_model: extModel,
+					attachment_ids: attIds,
+				});
+				return jsonWithCors({
+					ok: true,
+					query: result.query,
+					records: result.records,
+				});
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return jsonWithCors({ ok: false, error: message }, { status: 500 });
+			}
+		}
+
+		if (url.pathname === "/api/dify/datasets" && request.method === "GET") {
+			const pageRaw = url.searchParams.get("page");
+			const limitRaw = url.searchParams.get("limit");
+			const keyword = url.searchParams.get("keyword") ?? undefined;
+			const includeAllRaw = url.searchParams.get("include_all");
+
+			let page: number | undefined;
+			let limit: number | undefined;
+			if (pageRaw !== null && pageRaw !== "") {
+				page = Number.parseInt(pageRaw, 10);
+				if (!Number.isFinite(page) || page < 1) {
+					return jsonWithCors(
+						{ ok: false, error: 'Query "page" must be a positive integer.' },
+						{ status: 400 },
+					);
+				}
+			}
+			if (limitRaw !== null && limitRaw !== "") {
+				limit = Number.parseInt(limitRaw, 10);
+				if (!Number.isFinite(limit) || limit < 1) {
+					return jsonWithCors(
+						{ ok: false, error: 'Query "limit" must be a positive integer.' },
+						{ status: 400 },
+					);
+				}
+			}
+
+			const include_all =
+				includeAllRaw === "1" ||
+				includeAllRaw === "true" ||
+				includeAllRaw === "yes";
+
+			const tag_ids = url.searchParams.getAll("tag_ids").filter(Boolean);
+
+			try {
+				const list = await listDifyDatasets(env, {
+					page,
+					limit,
+					keyword: keyword ?? undefined,
+					include_all: include_all || undefined,
+					tag_ids: tag_ids.length ? tag_ids : undefined,
+				});
+				return jsonWithCors({
+					ok: true,
+					data: list.data,
+					has_more: list.has_more,
+					limit: list.limit,
+					total: list.total,
+					page: list.page,
+				});
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return jsonWithCors({ ok: false, error: message }, { status: 500 });
+			}
 		}
 
 		if (url.pathname === "/api/llm-test" && request.method === "GET") {

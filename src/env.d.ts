@@ -5,6 +5,16 @@ declare namespace Cloudflare {
 		 * (`VENICE_API_KEY=...`) или `npx wrangler secret put VENICE_API_KEY`.
 		 */
 		VENICE_API_KEY: string;
+		/**
+		 * Ключ Dataset / Knowledge API в Dify (панель базы знаний → API / Service API).
+		 * `POST /datasets/{id}/retrieve` и др. Секрет: `npx wrangler secret put DIFY_DATASET_API_KEY`.
+		 */
+		DIFY_DATASET_API_KEY?: string;
+		/**
+		 * Базовый URL Knowledge API (например self-hosted). По умолчанию `https://api.dify.ai/v1`.
+		 * Без завершающего слэша.
+		 */
+		DIFY_API_BASE?: string;
 		/** Signing secret из Stripe Dashboard → Webhooks (`whsec_...`). */
 		STRIPE_WEBHOOK_SECRET: string;
 		/**
