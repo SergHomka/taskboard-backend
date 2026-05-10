@@ -16,6 +16,7 @@ import {
 	sendLlmRequest,
 	type ChatMessage,
 } from "./llm";
+import { consultWithKnowledgeBase } from "./knowledgeConsultant";
 import {
 	listDifyDatasets,
 	retrieveDifyDataset,
@@ -50,20 +51,24 @@ function emptyWithCors(status = 204): Response {
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
+		const pathname =
+			url.pathname.length > 1 && url.pathname.endsWith("/")
+				? url.pathname.slice(0, -1)
+				: url.pathname;
 
-		if (url.pathname === "/api/stripe-webhook" && request.method === "POST") {
+		if (pathname === "/api/stripe-webhook" && request.method === "POST") {
 			return handleStripeWebhook(request, env);
 		}
 
-		if (url.pathname === "/api/telegram-webhook") {
+		if (pathname === "/api/telegram-webhook") {
 			return handleTelegramWebhook(request, env, ctx);
 		}
 
-		if (url.pathname.startsWith("/api/") && request.method === "OPTIONS") {
+		if (pathname.startsWith("/api/") && request.method === "OPTIONS") {
 			return emptyWithCors(204);
 		}
 
-		if (url.pathname === "/api/dify/retrieve" && request.method === "POST") {
+		if (pathname === "/api/dify/retrieve" && request.method === "POST") {
 			let body: unknown;
 			try {
 				body = await request.json();
@@ -145,7 +150,70 @@ export default {
 			}
 		}
 
-		if (url.pathname === "/api/dify/datasets" && request.method === "GET") {
+		if (pathname === "/api/knowledge-chat" && request.method === "POST") {
+			let body: unknown;
+			try {
+				body = await request.json();
+			} catch {
+				return jsonWithCors(
+					{ ok: false, error: "Invalid JSON body." },
+					{ status: 400 },
+				);
+			}
+			if (typeof body !== "object" || body === null) {
+				return jsonWithCors(
+					{ ok: false, error: "Body must be a JSON object." },
+					{ status: 400 },
+				);
+			}
+			const o = body as Record<string, unknown>;
+			const queryText = o.query;
+			const datasetIdRaw = o.dataset_id;
+			const modelField = o.model;
+			const model =
+				typeof modelField === "string" && modelField.length > 0
+					? modelField
+					: undefined;
+
+			if (typeof queryText !== "string" || !queryText.trim()) {
+				return jsonWithCors(
+					{ ok: false, error: 'Provide non-empty string "query".' },
+					{ status: 400 },
+				);
+			}
+
+			const fromBody =
+				typeof datasetIdRaw === "string" && datasetIdRaw.trim().length > 0
+					? datasetIdRaw.trim()
+					: undefined;
+			const fromEnv = env.DIFY_KNOWLEDGE_DATASET_ID?.trim();
+			const datasetId = fromBody ?? (fromEnv && fromEnv.length > 0 ? fromEnv : undefined);
+
+			if (!datasetId) {
+				return jsonWithCors(
+					{
+						ok: false,
+						error:
+							'Provide "dataset_id" in the JSON body or set DIFY_KNOWLEDGE_DATASET_ID for the worker.',
+					},
+					{ status: 400 },
+				);
+			}
+
+			try {
+				const reply = await consultWithKnowledgeBase(env, {
+					datasetId,
+					userQuestion: queryText,
+					model,
+				});
+				return jsonWithCors({ ok: true, reply });
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return jsonWithCors({ ok: false, error: message }, { status: 500 });
+			}
+		}
+
+		if (pathname === "/api/dify/datasets" && request.method === "GET") {
 			const pageRaw = url.searchParams.get("page");
 			const limitRaw = url.searchParams.get("limit");
 			const keyword = url.searchParams.get("keyword") ?? undefined;
@@ -201,7 +269,7 @@ export default {
 			}
 		}
 
-		if (url.pathname === "/api/llm-test" && request.method === "GET") {
+		if (pathname === "/api/llm-test" && request.method === "GET") {
 			const prompt =
 				url.searchParams.get("q") ?? "Ответь одним коротким словом: работает?";
 			try {
@@ -215,7 +283,7 @@ export default {
 			}
 		}
 
-		if (url.pathname === "/api/chat" && request.method === "POST") {
+		if (pathname === "/api/chat" && request.method === "POST") {
 			let body: unknown;
 			try {
 				body = await request.json();
@@ -264,7 +332,7 @@ export default {
 			}
 		}
 
-		if (url.pathname === "/api/subtasks" && request.method === "POST") {
+		if (pathname === "/api/subtasks" && request.method === "POST") {
 			let body: unknown;
 			try {
 				body = await request.json();
@@ -303,6 +371,18 @@ export default {
 				const message = err instanceof Error ? err.message : String(err);
 				return jsonWithCors({ ok: false, error: message }, { status: 500 });
 			}
+		}
+
+		if (pathname.startsWith("/api/")) {
+			return jsonWithCors(
+				{
+					ok: false,
+					error: "Unknown API path or HTTP method.",
+					path: pathname,
+					method: request.method,
+				},
+				{ status: 404 },
+			);
 		}
 
 		return new Response("Привет, мир!");

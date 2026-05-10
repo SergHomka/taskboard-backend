@@ -15,6 +15,11 @@ declare namespace Cloudflare {
 		 * Без завершающего слэша.
 		 */
 		DIFY_API_BASE?: string;
+		/**
+		 * UUID базы знаний по умолчанию для POST /api/knowledge-chat, если в теле нет dataset_id.
+		 * Vars или секрет по желанию; например `.dev.vars` / `wrangler vars`.
+		 */
+		DIFY_KNOWLEDGE_DATASET_ID?: string;
 		/** Signing secret из Stripe Dashboard → Webhooks (`whsec_...`). */
 		STRIPE_WEBHOOK_SECRET: string;
 		/**
